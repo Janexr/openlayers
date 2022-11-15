@@ -4,6 +4,8 @@ import Map from '../../../../../src/ol/Map.js';
 import Point from '../../../../../src/ol/geom/Point.js';
 import VectorSource from '../../../../../src/ol/source/Vector.js';
 import View from '../../../../../src/ol/View.js';
+import {apply as applyTransform} from '../../../../../src/ol/transform.js';
+import {containsCoordinate} from '../../../../../src/ol/extent.js';
 
 describe('ol/layer/Heatmap', function () {
   /** @type {HTMLDivElement} */
@@ -113,6 +115,93 @@ describe('ol/layer/Heatmap', function () {
         expect(res).to.be(null);
 
         done();
+      });
+    });
+  });
+
+  describe('useGradientOpacity', function () {
+    it('the same level of opacity for all the values', function (done) {
+      const feature = new Feature({
+        geometry: new Point([0, 0]),
+        id: 1,
+        weight: 0.2,
+      });
+
+      const source = new VectorSource({
+        features: [feature],
+      });
+      layer = new HeatmapLayer({
+        source: source,
+        blur: 10,
+        radius: 10,
+        useGradientOpacity: true,
+      });
+      map.addLayer(layer);
+      map.render();
+
+      let pixelContext;
+      function getDataAtPixel(pixel, frameState, gl) {
+        const renderPixel = applyTransform(
+          [frameState.pixelRatio, 0, 0, frameState.pixelRatio, 0, 0],
+          pixel.slice()
+        );
+        if (!gl) return null;
+        const layerExtent = layer.getExtent();
+        if (layerExtent) {
+          const renderCoordinate = applyTransform(
+            frameState.pixelToCoordinateTransform,
+            pixel.slice()
+          );
+
+          /** get only data inside of the layer extent */
+          if (!containsCoordinate(layerExtent, renderCoordinate)) {
+            return null;
+          }
+        }
+
+        const attributes = gl.getContextAttributes();
+        if (!attributes || !attributes.preserveDrawingBuffer) {
+          // we assume there is data at the given pixel (although there might not be)
+          return new Uint8Array();
+        }
+
+        const x = Math.round(renderPixel[0]);
+        const y = Math.round(renderPixel[1]);
+        if (!pixelContext) {
+          const pixelCanvas = document.createElement('canvas');
+          pixelCanvas.width = 1;
+          pixelCanvas.height = 1;
+          pixelContext = pixelCanvas.getContext('2d');
+        }
+        pixelContext.clearRect(0, 0, 1, 1);
+        let data;
+        try {
+          pixelContext.drawImage(gl.canvas, x, y, 1, 1, 0, 0, 1, 1);
+          data = pixelContext.getImageData(0, 0, 1, 1).data;
+        } catch (err) {
+          return data;
+        }
+
+        return data[3];
+      }
+
+      layer.on('postrender', (e) => {
+        const gl = e.context;
+        let alpha, pixel;
+        setTimeout(() => {
+          pixel = map.getPixelFromCoordinate([0, 0]);
+          alpha = getDataAtPixel(pixel, e.frameState, gl);
+          expect(alpha).to.be(255);
+          alpha = getDataAtPixel([pixel[0] - 15, pixel[1]], e.frameState, gl);
+          expect(alpha).to.be(255);
+          alpha = getDataAtPixel(
+            [pixel[0] - 20, pixel[1] - 20],
+            e.frameState,
+            gl
+          );
+          expect(alpha).to.be(0);
+          done();
+        }, 1000);
       });
     });
   });

@@ -29,6 +29,7 @@ import {createCanvasContext2D} from '../dom.js';
  * of the heatmap, specified as an array of CSS color strings.
  * @property {number} [radius=8] Radius size in pixels.
  * @property {number} [blur=15] Blur size in pixels.
+ * @property {boolean} [useGradientOpacity=false] use the opacity of the color gradient.
  * @property {string|function(import("../Feature.js").default):number} [weight='weight'] The feature
  * attribute to use for the weight or a function that returns a weight from a feature. Weight values
  * should range from 0 to 1 (and values outside will be clamped to that range).
@@ -44,6 +45,7 @@ const Property = {
   BLUR: 'blur',
   GRADIENT: 'gradient',
   RADIUS: 'radius',
+  USEGRADIENTOPACITY: 'useGradientOpacity'
 };
 
 /**
@@ -91,6 +93,12 @@ class Heatmap extends BaseVector {
     this.setBlur(options.blur !== undefined ? options.blur : 15);
 
     this.setRadius(options.radius !== undefined ? options.radius : 8);
+
+    this.setUseGradientOpacity(
+      options.useGradientOpacity !== undefined
+        ? options.useGradientOpacity
+        : false
+    );
 
     const weight = options.weight ? options.weight : 'weight';
     if (typeof weight === 'string') {
@@ -171,6 +179,14 @@ class Heatmap extends BaseVector {
    */
   setRadius(radius) {
     this.set(Property.RADIUS, radius);
+  }
+
+  getUseGradientOpacity() {
+    return /** @type {boolean} */ (this.get(Property.USEGRADIENTOPACITY));
+  }
+
+  setUseGradientOpacity(useGradientOpacity) {
+    this.set(Property.USEGRADIENTOPACITY, useGradientOpacity);
   }
 
   createRenderer() {
@@ -285,16 +301,31 @@ class Heatmap extends BaseVector {
             uniform sampler2D u_image;
             uniform sampler2D u_gradientTexture;
             uniform float u_opacity;
+            uniform float u_userOpacity;
 
             varying vec2 v_texCoord;
 
             void main() {
               vec4 color = texture2D(u_image, v_texCoord);
-              gl_FragColor.a = color.a * u_opacity;
-              gl_FragColor.rgb = texture2D(u_gradientTexture, vec2(0.5, color.a)).rgb;
-              gl_FragColor.rgb *= gl_FragColor.a;
+              float alpha = color.a * u_opacity;
+              vec4 rgba = texture2D(u_gradientTexture, vec2(0.5, color.a)).rgba;
+              gl_FragColor.rgb = rgba.rgb;
+              if (u_userOpacity == 1.0) {
+                if (alpha > 0.0) {
+                  gl_FragColor.rgb *= rgba.a;
+                  gl_FragColor.a = rgba.a;
+                } else {
+                  gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+                }
+              } else {
+                gl_FragColor.rgb *= alpha;
+                gl_FragColor.a = alpha;
+              }
             }`,
           uniforms: {
+            u_userOpacity: () => {
+              return this.getUseGradientOpacity() ? 1.0 : 0.0;
+            },
             u_gradientTexture: () => {
               return this.gradient_;
             },
